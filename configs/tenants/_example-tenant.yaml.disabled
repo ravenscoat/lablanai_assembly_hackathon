@@ -1,0 +1,87 @@
+# example-tenant — minimal WORKING tenant for local smoke tests.
+#
+# English, single-language, managed STT/TTS (LiveKit inference gateway) so it
+# runs without any self-hosted engine. Uses fake placeholder id/phone. Copy
+# configs/tenants/_template.yaml (not this file) when onboarding a real tenant.
+
+tenant:
+  # Placeholder ObjectId — replace with the real Platform API record id.
+  id: "000000000000000000000001"
+  slug: "example-tenant"
+  name: "Example Tenant"
+  phone_numbers:
+    - "+920000000000"          # fake +92 number for local testing only
+
+personality:
+  system_prompt: |
+    You are a friendly customer-support voice assistant for Example Tenant.
+    Answer questions about the company's products and services. Keep replies
+    short and natural for voice. If you don't know the answer, say so and offer
+    to connect the caller to a human operator.
+  greeting: "Hello! Thanks for calling Example Tenant. How can I help you today?"
+  greeting_allow_interruptions: true
+  fallback: "Sorry, I'm not able to answer that. Let me connect you to an operator."
+  goodbye: "Thank you for calling Example Tenant. Goodbye!"
+
+languages:
+  default: "en"
+  available: ["en"]
+  ask_on_start: false
+
+voice:
+  # Managed defaults — no env/host needed. Falls through to the LiveKit
+  # inference gateway (deepgram STT / cartesia TTS).
+  stt_provider: inference
+  tts_provider: inference
+  tts_voice_id: ""
+  speed: 1.0
+
+llm:
+  provider: gemini
+  model: gemini-3.5-flash
+  temperature: 0.2
+
+behavior:
+  language: en
+  max_call_duration_seconds: 600
+  allow_interruptions: true
+
+knowledge_base:
+  enabled: true
+  provider: qdrant
+  collection: example_tenant_faq
+  embedding_model: gemini-embedding-001
+  confidence_thresholds:
+    high: 0.70
+    medium: 0.60
+  kb_paths:
+    - knowledge/example-tenant/
+
+transfer:
+  enabled: false              # set true once an operator number/queue exists
+  transfer_mode: web
+  transfer_message: "Connecting you to an operator. Please hold."
+  office_hours_start: 9
+  office_hours_end: 18
+  office_days: [0, 1, 2, 3, 4]   # Mon-Fri
+  timezone: "Asia/Karachi"
+
+tools:
+  platform:
+    - search_knowledge_base
+    - request_escalation
+    - get_current_time
+    - end_call
+  tenant: []
+
+responses:
+  silence_prompt: "Are you still there? Please go ahead."
+  silence_goodbye: "It seems the line dropped. Goodbye!"
+  fallback: "Sorry, I'm not able to answer that question."
+  goodbye: "Goodbye!"
+  tool_wait: "One moment, please."
+
+silence:
+  prompt_timeout: 15.0
+  goodbye_timeout: 30.0
+  monitor_interval: 2.0

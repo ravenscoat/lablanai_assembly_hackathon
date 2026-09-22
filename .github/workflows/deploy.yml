@@ -1,0 +1,355 @@
+name: Deploy
+
+# - Push to 'staging' branch auto-deploys to the staging environment (NAV-171).
+# - Prod stays manual-only: trigger via workflow_dispatch from 'main' branch with environment=prod.
+# - Manual workflow_dispatch still works for staging too (re-run without a commit).
+on:
+  push:
+    branches:
+      - staging
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - prod
+      config_env:
+        description: "Which tenant config set to load (configs/tenants/<config_env>/). prod = real tenants/phones, dev = dev tenants/phones."
+        required: true
+        default: prod
+        type: choice
+        options:
+          - prod
+          - dev
+
+concurrency:
+  group: deploy-${{ inputs.environment || 'staging' }}-${{ inputs.config_env || 'prod' }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  # CI gate: tests must pass before build + deploy (NAV-171).
+  tests:
+    name: Tests
+    uses: ./.github/workflows/test.yml
+
+  # Eval gate: behavioral checks must pass before deploy.
+  eval:
+    name: Eval
+    uses: ./.github/workflows/eval.yml
+    with:
+      environment: ${{ inputs.environment || 'staging' }}
+    secrets: inherit
+
+  build-and-push:
+    name: Build & push image
+    needs: [tests, eval]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_ref: ${{ steps.meta.outputs.image_ref }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set lowercase image name
+        id: meta
+        run: |
+          IMAGE_LC="$(echo '${{ env.IMAGE }}' | tr '[:upper:]' '[:lower:]')"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          ENV_NAME="${{ inputs.environment || 'staging' }}"
+          STAMP="$(date -u +%Y%m%d-%H%M)"
+          RELEASE_TAG="deploy-${ENV_NAME}-${STAMP}-${SHORT_SHA}"
+          echo "image_lc=$IMAGE_LC" >> "$GITHUB_OUTPUT"
+          echo "image_ref=$IMAGE_LC:sha-$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_lc }}:${{ inputs.environment || 'staging' }}
+            ${{ steps.meta.outputs.image_lc }}:sha-${{ steps.meta.outputs.short_sha }}
+            ${{ steps.meta.outputs.image_lc }}:${{ steps.meta.outputs.release_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to ${{ inputs.environment || 'staging' }}
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    # GitHub Environment provides scoped secrets and optional required-reviewer gate.
+    environment: ${{ inputs.environment || 'staging' }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clear stale compose file (workaround for tar utime error)
+        # scp-action uses tar extract, which fails with "Operation not permitted"
+        # if the existing file is owned by a different user (e.g. root). Remove
+        # it first so scp drops a fresh one owned by the SSH user. Uses sudo as
+        # a fallback in case the file is root-owned.
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          port: ${{ secrets.SSH_PORT }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            mkdir -p "${{ secrets.DEPLOY_DIR }}" 2>/dev/null || sudo mkdir -p "${{ secrets.DEPLOY_DIR }}"
+            sudo chown -R "$USER":"$USER" "${{ secrets.DEPLOY_DIR }}" 2>/dev/null || true
+            rm -f "${{ secrets.DEPLOY_DIR }}/docker-compose.yml" 2>/dev/null || sudo rm -f "${{ secrets.DEPLOY_DIR }}/docker-compose.yml"
+
+      - name: Sync docker-compose.yml to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          port: ${{ secrets.SSH_PORT }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "docker-compose.yml"
+          target: ${{ secrets.DEPLOY_DIR }}
+          overwrite: true
+
+      - name: SSH deploy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          port: ${{ secrets.SSH_PORT }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          # Pass GHCR creds + env so the server can auth & deploy without a persistent PAT.
+          envs: DEPLOY_ENV,CONFIG_ENV,GHCR_USER,GHCR_TOKEN,DEPLOY_DIR
+          script: |
+            set -euxo pipefail
+
+            cd "$DEPLOY_DIR"
+            EXPECTED_IMAGE="$(echo 'ghcr.io/${{ github.repository }}' | tr '[:upper:]' '[:lower:]'):$DEPLOY_ENV"
+            CONTAINER="voice-agent"
+            MONITOR_CONTAINER="voice-agent-monitor"
+
+            echo "== 0/7 log in to GHCR with workflow token =="
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+            echo "== 1/7 capture current image for rollback =="
+            PREV_ID=$(docker inspect "$CONTAINER" --format '{{.Image}}' 2>/dev/null || echo "")
+            if [ -n "$PREV_ID" ]; then
+              echo "previous image id: $PREV_ID"
+            else
+              echo "no previous container — first deploy, rollback disabled"
+            fi
+
+            rollback() {
+              local rc=$?
+              if [ $rc -ne 0 ]; then
+                echo "::error::deploy failed (exit $rc)"
+                if [ -n "$PREV_ID" ]; then
+                  echo "::warning::rolling back to $PREV_ID"
+                  # Retag the previous image as the expected tag so compose picks it up.
+                  docker tag "$PREV_ID" "$EXPECTED_IMAGE" || true
+                  IMAGE_TAG="$DEPLOY_ENV" docker compose up -d --force-recreate agent agent-monitor || true
+                  echo "::warning::rollback attempted; current container state:"
+                  docker ps --filter "name=$CONTAINER" || true
+                fi
+                echo "--- last 100 log lines of $CONTAINER ---"
+                docker logs --tail 100 "$CONTAINER" 2>&1 || true
+              fi
+              exit $rc
+            }
+            trap rollback EXIT
+
+            echo "== 2/7 verify compose file has expected image ref =="
+            grep -q "urdu-voice-agent" docker-compose.yml || {
+              echo "::error::docker-compose.yml missing GHCR image ref — scp step failed?"
+              exit 1
+            }
+
+            echo "== 3/7 ensure IMAGE_TAG and CONFIG_ENV are set in .env =="
+            # Use docker to fix permissions since we have docker access but not passwordless sudo
+            docker run --rm -v "$(pwd):/work" alpine chown $(id -u):$(id -g) /work/.env 2>/dev/null || true
+            if ! grep -q '^IMAGE_TAG=' .env 2>/dev/null; then
+              echo "IMAGE_TAG=$DEPLOY_ENV" >> .env
+            fi
+            # CONFIG_ENV picks which configs/tenants/<env>/ subfolder the loader reads.
+            # Overwrite on each deploy so re-running with a different choice takes effect.
+            if grep -q '^CONFIG_ENV=' .env 2>/dev/null; then
+              sed -i.bak "s/^CONFIG_ENV=.*/CONFIG_ENV=$CONFIG_ENV/" .env && rm -f .env.bak
+            else
+              echo "CONFIG_ENV=$CONFIG_ENV" >> .env
+            fi
+            grep -E '^(IMAGE_TAG|CONFIG_ENV)=' .env
+
+            echo "== 4/7 explicit docker pull =="
+            docker pull "$EXPECTED_IMAGE"
+            EXPECTED_ID=$(docker image inspect "$EXPECTED_IMAGE" --format '{{.Id}}')
+            echo "pulled image id: $EXPECTED_ID"
+
+            echo "== 5/8 force-recreate agent container =="
+            # Heal orphan containers: if a container with this name exists but
+            # isn't owned by this compose project (e.g. started manually or under
+            # a different project name), `docker compose up --force-recreate`
+            # errors with "container name already in use". Removing it first
+            # makes the deploy idempotent and self-healing.
+            docker rm -f "$CONTAINER" 2>/dev/null || true
+            docker rm -f "$MONITOR_CONTAINER" 2>/dev/null || true
+            IMAGE_TAG="$DEPLOY_ENV" docker compose up -d --force-recreate --pull always agent
+
+            echo "== 6/8 wait for agent health =="
+            for i in $(seq 1 24); do
+              STATUS=$(docker inspect "$CONTAINER" --format '{{.State.Status}}' 2>/dev/null || echo "absent")
+              HEALTH=$(docker inspect "$CONTAINER" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || echo "absent")
+              if [ "$STATUS" = "running" ] && { [ "$HEALTH" = "healthy" ] || curl -fsS http://127.0.0.1:8082/health >/dev/null 2>&1; }; then
+                echo "agent healthy after ${i} attempt(s)"
+                break
+              fi
+              if [ "$i" = "24" ]; then
+                echo "::error::agent did not become healthy (status=$STATUS health=$HEALTH)"
+                exit 1
+              fi
+              sleep 5
+            done
+
+            echo "== 7/8 start monitor and verify pulled images =="
+            IMAGE_TAG="$DEPLOY_ENV" docker compose up -d --force-recreate --pull always agent-monitor
+            RUNNING_ID=$(docker inspect "$CONTAINER" --format '{{.Image}}')
+            RUNNING_IMAGE=$(docker inspect "$CONTAINER" --format '{{.Config.Image}}')
+            MONITOR_RUNNING_ID=$(docker inspect "$MONITOR_CONTAINER" --format '{{.Image}}')
+            echo "running container image name: $RUNNING_IMAGE"
+            echo "running container image id:   $RUNNING_ID"
+            echo "monitor container image id:   $MONITOR_RUNNING_ID"
+            if [ "$RUNNING_ID" != "$EXPECTED_ID" ]; then
+              echo "::error::container is running $RUNNING_ID but we pulled $EXPECTED_ID"
+              exit 1
+            fi
+            if [ "$MONITOR_RUNNING_ID" != "$EXPECTED_ID" ]; then
+              echo "::error::monitor is running $MONITOR_RUNNING_ID but we pulled $EXPECTED_ID"
+              exit 1
+            fi
+
+            echo "== 8/8 verify containers are up =="
+            STATUS=$(docker inspect "$CONTAINER" --format '{{.State.Status}}')
+            if [ "$STATUS" != "running" ]; then
+              echo "::error::container status is '$STATUS' (expected 'running')"
+              exit 1
+            fi
+
+            MONITOR_STATUS="unknown"
+            for i in $(seq 1 18); do
+              MONITOR_STATUS=$(docker inspect "$MONITOR_CONTAINER" --format '{{.State.Status}}' 2>/dev/null || echo "absent")
+              if [ "$MONITOR_STATUS" = "running" ]; then
+                echo "monitor running after ${i} attempt(s)"
+                break
+              fi
+              sleep 5
+            done
+            if [ "$MONITOR_STATUS" != "running" ]; then
+              echo "::warning::monitor container status is '$MONITOR_STATUS' after waiting; agent deploy remains healthy"
+              docker ps -a --filter "name=$MONITOR_CONTAINER" || true
+              docker logs --tail 80 "$MONITOR_CONTAINER" 2>&1 || true
+            fi
+
+            docker image prune -f
+            # Log out so the short-lived GHCR token doesn't linger on disk.
+            docker logout ghcr.io || true
+            echo "deploy OK"
+        env:
+          DEPLOY_ENV: ${{ inputs.environment || 'staging' }}
+          CONFIG_ENV: ${{ inputs.config_env || 'prod' }}
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dump container logs on failure
+        if: failure()
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          port: ${{ secrets.SSH_PORT }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "=== docker ps ==="
+            docker ps -a --filter name=voice-agent || true
+            echo ""
+            echo "=== voice-agent logs (last 200) ==="
+            docker logs --tail 200 voice-agent 2>&1 || true
+
+  smoke:
+    name: Post-deploy smoke test
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'staging' }}
+    steps:
+      - name: Hit /health via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          port: ${{ secrets.SSH_PORT }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              if curl -fsS http://127.0.0.1:8082/health >/dev/null; then
+                echo "health OK after ${i} attempt(s)"
+                exit 0
+              fi
+              sleep 3
+            done
+            echo "::error::/health did not return 200 within timeout"
+            exit 1
+
+  tag-release:
+    name: Tag successful release
+    needs: [build-and-push, smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create & push git tag
+        env:
+          RELEASE_TAG: ${{ needs.build-and-push.outputs.release_tag }}
+          DEPLOY_ENV: ${{ inputs.environment || 'staging' }}
+          SHORT_SHA: ${{ needs.build-and-push.outputs.short_sha }}
+        run: |
+          set -euo pipefail
+          GIT_TAG="${RELEASE_TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$GIT_TAG" -m "Deploy ${DEPLOY_ENV} @ ${SHORT_SHA}"
+          git push origin "$GIT_TAG"
+          echo "tagged: $GIT_TAG"
+          echo "image:  $(echo 'ghcr.io/${{ github.repository }}' | tr '[:upper:]' '[:lower:]'):$GIT_TAG"

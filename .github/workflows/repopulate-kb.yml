@@ -1,0 +1,161 @@
+name: Repopulate KB
+
+# Re-embeds and repopulates the RAG vector store (Qdrant) WITHOUT deploying any
+# agent code. For each tenant enabled in `configs/tenants/_defaults.yaml`
+# (`repopulate_kb:` block), the matching Qdrant collection is dropped, every FAQ
+# in `knowledge/<tenant>/faq_source.json` is re-embedded with Gemini, and the
+# fresh vectors are uploaded.
+#
+# How it works (no redeploy):
+#   1. The latest KB sources from this repo are copied into the already-running
+#      `voice-agent` container on the target server.
+#   2. `scripts/populate_qdrant.py --auto --force` runs INSIDE that container, so
+#      embeddings use the VM's attached service account (Vertex AI ADC) and reach
+#      Qdrant over the internal docker network at http://qdrant:6333.
+#   3. The agent container is never rebuilt, pulled, or recreated — only the
+#      vector DB contents change.
+#
+# Manual-only: this is a deliberate data operation, so it never runs on push.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target server (GitHub Environment that holds the SSH_* secrets)."
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - prod
+      force:
+        description: "Drop & recreate each collection before re-embedding (old data removed). Disable to upsert in place."
+        required: true
+        default: true
+        type: boolean
+
+# Never let two repopulations of the same environment overlap — a half-dropped
+# collection would serve empty results to live calls.
+concurrency:
+  group: repopulate-kb-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  repopulate:
+    name: Repopulate ${{ inputs.environment }} KB
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # SSH_* + DEPLOY_DIR secrets live in the staging/prod GitHub Environments.
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bundle latest KB sources
+        # Only the inputs populate_qdrant.py reads: the FAQ JSON, the
+        # repopulate_kb toggles, and the script itself. We deliberately do NOT
+        # ship src/ or other configs so the running agent's behavior is untouched.
+        run: |
+          set -euo pipefail
+          tar -czf kb-bundle.tgz \
+            knowledge \
+            configs/tenants/_defaults.yaml \
+            scripts/populate_qdrant.py
+          echo "bundle contents:"
+          tar -tzf kb-bundle.tgz
+
+      - name: Copy bundle to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          port: ${{ secrets.SSH_PORT }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "kb-bundle.tgz"
+          target: ${{ secrets.DEPLOY_DIR }}
+          overwrite: true
+
+      - name: Repopulate Qdrant inside the agent container
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          port: ${{ secrets.SSH_PORT }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          envs: DEPLOY_DIR,FORCE_FLAG
+          script: |
+            set -euo pipefail
+
+            CONTAINER="voice-agent"
+            BUNDLE="$DEPLOY_DIR/kb-bundle.tgz"
+
+            echo "== 1/5 verify agent container is running =="
+            STATUS=$(docker inspect "$CONTAINER" --format '{{.State.Status}}' 2>/dev/null || echo "absent")
+            if [ "$STATUS" != "running" ]; then
+              echo "::error::$CONTAINER is '$STATUS' — start it before repopulating the KB"
+              exit 1
+            fi
+
+            echo "== 2/5 stage latest KB sources on host =="
+            STAGE="$(mktemp -d)"
+            trap 'rm -rf "$STAGE" "$BUNDLE"' EXIT
+            tar -xzf "$BUNDLE" -C "$STAGE"
+            ls -R "$STAGE" | head -40
+
+            echo "== 3/5 copy fresh KB sources into the running container =="
+            # tar | docker cp - extracts on the daemon side, so the slim
+            # container image doesn't need tar itself. Overwrites /app/knowledge,
+            # /app/configs, /app/scripts/populate_qdrant.py in place.
+            tar -C "$STAGE" -cf - knowledge configs scripts \
+              | docker cp - "$CONTAINER":/app/
+
+            echo "== 4/5 re-embed & repopulate (force=$FORCE_FLAG) =="
+            # Runs inside the container: Vertex AI ADC (attached SA) for Gemini
+            # embeddings + internal http://qdrant:6333. Scope is controlled by the
+            # repopulate_kb block in configs/tenants/_defaults.yaml.
+            if [ "$FORCE_FLAG" = "true" ]; then
+              docker exec "$CONTAINER" python scripts/populate_qdrant.py --auto --force
+            else
+              docker exec "$CONTAINER" python scripts/populate_qdrant.py --auto
+            fi
+
+            echo "== 5/5 report collection point counts =="
+            docker exec "$CONTAINER" python - <<'PY'
+            import os, asyncio
+            from qdrant_client import AsyncQdrantClient
+
+            async def main():
+                c = AsyncQdrantClient(url=os.getenv("QDRANT_URL", "http://qdrant:6333"))
+                cols = await c.get_collections()
+                for col in cols.collections:
+                    info = await c.get_collection(col.name)
+                    print(f"  {col.name}: {info.points_count} points")
+
+            asyncio.run(main())
+            PY
+            echo "KB repopulation complete"
+        env:
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
+          FORCE_FLAG: ${{ inputs.force }}
+
+  verify:
+    name: Verify KB retrieval
+    needs: repopulate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add host to known_hosts
+        run: ssh-keyscan -p ${{ secrets.SSH_PORT || 22 }} -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Run KB retrieval check
+        # Re-embeds known prod queries inside the container and asserts the
+        # freshly-populated collection returns relevant, above-threshold hits.
+        run: python eval/check_kb.py --ssh --host ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} --port ${{ secrets.SSH_PORT || 22 }}

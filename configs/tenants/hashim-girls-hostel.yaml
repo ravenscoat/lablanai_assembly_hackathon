@@ -1,0 +1,95 @@
+# Hashim Girls Hostel — dummy tenant for local voice-agent setup.
+#
+# Urdu-only, single-language. Wired to real Urdu speech engines:
+#   - STT: Speechmatics real-time WS (urdu_stt)
+#   - TTS: Azure Cognitive Services neural voice ur-PK-UzmaNeural (urdu_tts)
+#   - LLM: Gemini via Google AI Studio API key (gemini_api)
+# Phone numbers are intentionally left empty until a real DID is assigned.
+
+tenant:
+  id: "000000000000000000000010"
+  slug: "hashim-girls-hostel"
+  name: "Hashim Girls Hostel"
+  phone_numbers:
+    - "+19475461076"
+
+personality:
+  system_prompt: |
+    آپ ہاشم گرلز ہاسٹل کی ایک معاون، مہذب اور دوستانہ اردو وائس اسسٹنٹ ہیں۔
+    آپ کا کام ہاسٹل کے کمروں، فیس، کھانے، اوقات، قواعد اور سہولیات کے بارے میں
+    کالر کو درست اور مختصر معلومات فراہم کرنا ہے۔
+    
+    اہم ہدایات:
+    - ہمیشہ اردو میں جواب دیں، اردو رسم الخط (نستعلیق) میں — انگریزی یا رومن
+      اردو میں ہرگز نہیں، کیونکہ آواز کا انجن صرف اردو رسم الخط کو درست تلفظ
+      کر سکتا ہے۔
+    - جواب مختصر اور قدرتی رکھیں، عام بات چیت جیسا۔
+    - اگر سوال کا جواب علم کے ذخیرے میں موجود نہ ہو تو سچ بتائیں اور ہاسٹل
+      اسٹاف سے رابطہ کرنے کی پیشکش کریں۔
+  greeting: "السلام علیکم! ہاشم گرلز ہاسٹل میں خوش آمدید۔ میں آپ کی کیا مدد کر سکتی ہوں؟"
+  greeting_allow_interruptions: true
+  fallback: "معاف کیجیے، اس سوال کا جواب میرے پاس نہیں ہے۔ میں آپ کو ہاسٹل اسٹاف سے ملا سکتی ہوں۔"
+  goodbye: "آپ کا شکریہ۔ اللہ حافظ!"
+
+languages:
+  default: "ur"
+  available: ["ur"]
+  ask_on_start: false
+
+voice:
+  stt_provider: urdu_stt
+  tts_provider: urdu_tts
+  tts_voice_id: "ur-PK-UzmaNeural"
+  speed: 1.0
+  voices:
+    ur: "ur-PK-UzmaNeural"
+
+llm:
+  provider: gemini_api
+  model: gemini-2.5-flash
+  temperature: 0.2
+
+behavior:
+  language: ur
+  max_call_duration_seconds: 600
+  allow_interruptions: true
+
+knowledge_base:
+  enabled: true
+  provider: qdrant
+  collection: hashim_girls_hostel_faq
+  embedding_model: gemini-embedding-001
+  confidence_thresholds:
+    high: 0.70
+    medium: 0.60
+  kb_paths:
+    - knowledge/hashim-girls-hostel/
+
+transfer:
+  enabled: false
+  transfer_mode: web
+  transfer_message: "میں آپ کو ہاسٹل اسٹاف سے ملا رہی ہوں، تھوڑی دیر انتظار کریں۔"
+  office_hours_start: 9
+  office_hours_end: 18
+  office_days: [0, 1, 2, 3, 4, 5]
+  timezone: "Asia/Karachi"
+
+tools:
+  platform:
+    - search_knowledge_base
+    - request_escalation
+    - get_current_time
+    - end_call
+  tenant: []
+
+responses:
+  silence_prompt: "کیا آپ ابھی بھی لائن پر ہیں؟ براہ کرم بتائیں۔"
+  silence_goodbye: "لگتا ہے لائن منقطع ہو گئی۔ اللہ حافظ!"
+  fallback: "معاف کیجیے، اس سوال کا جواب میرے پاس نہیں ہے۔"
+  goodbye: "اللہ حافظ!"
+  tool_wait: "ایک لمحہ، براہ کرم۔"
+
+silence:
+  prompt_timeout: 15.0
+  goodbye_timeout: 30.0
+  monitor_interval: 2.0

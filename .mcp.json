@@ -1,0 +1,16 @@
+{
+    "mcpServers": {
+        "livekit-docs": {
+            "type": "http",
+            "url": "https://docs.livekit.io/mcp"
+        },
+        "context7": {
+            "type": "stdio",
+            "command": "npx",
+            "args": [
+                "-y",
+                "@upstash/context7-mcp@latest"
+            ]
+        }
+    }
+}

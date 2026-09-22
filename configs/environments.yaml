@@ -1,0 +1,25 @@
+# Per-environment identity overrides for tenants.
+#
+# How it works:
+#   - The deploy workflow's `config_env` input (prod | dev) is propagated to the
+#     container as the CONFIG_ENV env var.
+#   - At startup, ConfigLoader reads this file and, for each tenant YAML it
+#     loads, overrides `tenant.id` and `tenant.phone_numbers` from the section
+#     keyed by CONFIG_ENV and the tenant's slug.
+#   - When CONFIG_ENV is unset (e.g. local dev), no overrides are applied and
+#     the values inside each tenant YAML are used as-is.
+#
+# Keep slugs here in sync with `tenant.slug` in each YAML under configs/tenants/.
+# `id` must be a 24-char Mongo ObjectId; `phone` must be E.164.
+#
+# Replace these placeholder example-tenant entries with your real tenants.
+
+prod:
+  example-tenant:
+    id: "000000000000000000000001"     # placeholder — replace with prod ObjectId
+    phone: "+920000000000"             # placeholder — replace with prod DID
+
+dev:
+  example-tenant:
+    id: "000000000000000000000002"     # placeholder — replace with dev ObjectId
+    phone: "+920000000001"             # placeholder — replace with dev DID

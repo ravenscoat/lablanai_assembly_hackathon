@@ -1,0 +1,33 @@
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+.venv/
+.v311/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.key
+*.crt
+*.pem
+service-account*.json
+
+# Tooling caches
+*.log
+.DS_Store
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+eval/reports/
+.playwright-mcp/
+/docs/superpowers/
+/artifacts/
+/data/
+
+# Silero VAD model cache (downloaded at runtime by livekit-plugins-silero)
+.models/

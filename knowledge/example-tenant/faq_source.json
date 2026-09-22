@@ -1,0 +1,26 @@
+[
+  {
+    "id": "example_001_business_hours",
+    "category": "general",
+    "question": "What are your business hours? When are you open? What time do you open and close?",
+    "answer": "Our support line is open Monday to Friday, from nine in the morning to six in the evening. We are closed on weekends and public holidays.",
+    "keywords": ["hours", "open", "timing", "schedule"],
+    "source": "example_faq_v1"
+  },
+  {
+    "id": "example_002_password_reset",
+    "category": "account",
+    "question": "How do I reset my password? I forgot my password. How can I recover my account?",
+    "answer": "To reset your password, open the app, tap Sign In, then tap Forgot Password and follow the steps sent to your registered email or phone number.",
+    "keywords": ["password", "reset", "login", "account recovery"],
+    "source": "example_faq_v1"
+  },
+  {
+    "id": "example_003_contact_support",
+    "category": "general",
+    "question": "How do I contact support? Is there a human I can talk to? How do I reach a person?",
+    "answer": "You can reach a human agent by asking to speak with an operator during a call, or by emailing support during business hours. We will connect you as soon as one is available.",
+    "keywords": ["contact", "support", "operator", "human", "help"],
+    "source": "example_faq_v1"
+  }
+]

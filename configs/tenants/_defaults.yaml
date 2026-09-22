@@ -1,0 +1,113 @@
+# Shared defaults inherited by all tenants.
+# Tenant-specific YAMLs (configs/tenants/<slug>.yaml) override these values via
+# deep-merge. See src/config/schema.py (TenantConfig) for the full field list.
+
+voice:
+  # STT/TTS providers are pluggable string keys dispatched in
+  # src/pipeline/voice_factory.py. Default to the managed LiveKit inference
+  # gateway ("inference") so the blueprint runs out-of-the-box without any
+  # self-hosted engine — it falls through to deepgram (STT) / cartesia (TTS).
+  #
+  # Available STT provider keys:
+  #   inference  -> LiveKit inference gateway (deepgram/nova-3) — managed default
+  #   yandex     -> Yandex SpeechKit (providers/yandex_stt.py)
+  #   navai      -> HTTP batch GPU server (providers/navai_stt.py; env NAVAI_STT_URL)
+  #   custom     -> HTTP batch GPU server (providers/custom_stt.py; env CUSTOM_STT_URL)
+  #   navai_ws   -> WebSocket streaming STT (providers/navai_ws_stt.py; env NAVAI_WS_STT_URL)
+  #   urdu_stt   -> Urdu STT STUB seam (providers/urdu_stt.py; env URDU_STT_URL) — TODO(urdu)
+  #
+  # Available TTS provider keys:
+  #   inference  -> LiveKit inference gateway (cartesia/sonic-2) — managed default
+  #   yandex     -> Yandex SpeechKit v3 (providers/yandex_tts.py)
+  #   navai      -> HTTP GPU server (providers/navai_tts.py; env NAVAI_TTS_URL)
+  #   custom     -> HTTP GPU server (providers/custom_tts.py; env CUSTOM_TTS_URL)
+  #   navai_ws   -> WebSocket streaming TTS (providers/navai_ws_tts.py; env NAVAI_WS_TTS_URL)
+  #   urdu_tts   -> Urdu TTS STUB seam (providers/urdu_tts.py; env URDU_TTS_URL) — TODO(urdu)
+  stt_provider: inference
+  tts_provider: inference
+  tts_voice_id: ""
+  speed: 1.0
+  pitch: 1.0
+
+llm:
+  # Available LLM provider keys: gemini (default, Vertex ADC) | openai | custom | lexantei
+  provider: gemini
+  model: gemini-3.5-flash
+  temperature: 0.2
+  max_tokens: 2048
+
+vad:
+  min_silence_duration: 0.8
+  min_speech_duration: 0.12
+  activation_threshold: 0.45
+  prefix_padding_duration: 0.4
+  max_buffered_speech: 60.0
+
+behavior:
+  # Legacy single-language field — mirror languages.default in each tenant YAML.
+  language: en
+  max_call_duration_seconds: 600
+  preemptive_generation: false
+  allow_interruptions: true
+
+transfer:
+  enabled: false
+  transfer_mode: web  # web | sip
+  trigger_phrases:
+    - operator
+    - human
+    - talk to a person
+  transfer_message: "Connecting you to an operator. Please hold."
+  office_hours_start: 9
+  office_hours_end: 18
+  office_days: [0, 1, 2, 3, 4]  # Mon-Fri
+  # IANA timezone for the out-of-hours office-hours clock check
+  # (src/tools/platform/escalate.py). Defaults to Asia/Karachi for Pakistan.
+  timezone: "Asia/Karachi"
+  # Guardian block — override per-tenant (see configs/tenants/_template.yaml).
+  # When null, the LLM has no "try to help first" guidance and escalates on any
+  # trigger-phrase match.
+  guardian: ~
+
+knowledge_base:
+  enabled: false
+  provider: qdrant
+  embedding_model: gemini-embedding-001
+  confidence_thresholds:
+    high: 0.75
+    medium: 0.70
+
+responses:
+  silence_prompt: "Are you still there? Please go ahead."
+  silence_goodbye: "It seems the line dropped. Goodbye!"
+  fallback: "Sorry, I'm not able to answer that question."
+  goodbye: "Goodbye! Call again if you have more questions."
+  tool_wait: "One moment, please."
+
+silence:
+  prompt_timeout: 15.0
+  goodbye_timeout: 30.0
+  monitor_interval: 2.0
+
+tools:
+  platform:
+    - search_knowledge_base
+    - request_escalation
+    # confirm_escalation is auto-paired by AgentFactory when request_escalation
+    # is listed; listing it explicitly is also fine.
+    - get_current_time
+    - end_call
+  tenant: []
+
+observability:
+  metrics_port: 9090
+  health_port: 8082
+
+# Per-tenant KB repopulation flags, consumed by scripts/populate_qdrant.py --auto
+# at Docker entrypoint. Default false so existing data isn't re-embedded (and
+# re-billed) on every container restart. Keys are the knowledge/<dir>/ directory
+# names; the script maps each to knowledge/<dir>/faq_source.json and collection
+# "<dir>_faq".
+repopulate_kb:
+  example_tenant: false
+  hashim_girls_hostel: false

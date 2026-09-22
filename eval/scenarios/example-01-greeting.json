@@ -1,0 +1,15 @@
+{
+  "id": "example-01-greeting",
+  "category": "edge",
+  "description": "Generic greeting example — agent responds naturally without tools. Replace with real per-tenant scenarios (one JSON file per scenario).",
+  "turns": [
+    {
+      "user_message": "Hello",
+      "expect": {
+        "tool_called": null,
+        "response_keywords": ["help"],
+        "fail_keywords": []
+      }
+    }
+  ]
+}

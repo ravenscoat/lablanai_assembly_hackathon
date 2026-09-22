@@ -1,0 +1,159 @@
+# =============================================================================
+# TENANT TEMPLATE — copy to configs/tenants/<slug>.yaml and fill in.
+# =============================================================================
+# This is a fully-documented skeleton an onboarding script copies for each new
+# tenant. Every value here deep-merges OVER configs/tenants/_defaults.yaml, so
+# you only need to set the fields that differ from the defaults.
+#
+# The field shapes mirror src/config/schema.py (TenantConfig). Keys not present
+# here inherit from _defaults.yaml. Replace ALL <PLACEHOLDER> values.
+# See the runbook in README.md ("Onboarding a tenant") and BLUEPRINT-PLAN §4.
+# -----------------------------------------------------------------------------
+
+tenant:
+  # 24-char Mongo ObjectId of the tenant's record in the Platform API.
+  id: "<TENANT_OBJECT_ID>"
+  # Short, lowercase, hyphenated slug. Drives:
+  #   - the per-tenant API key env var ({SLUG_UPPER}_AGENT_API_KEY)
+  #   - the KB collection name convention (<slug>_faq)
+  #   - subdomain routing on the dashboard
+  slug: "<tenant-slug>"
+  name: "<Tenant Display Name>"
+  # E.164 DID(s) this tenant answers on. Routing is by CALLED number. For
+  # per-environment ids/phones, also add a block in configs/environments.yaml.
+  phone_numbers:
+    - "<+92XXXXXXXXXX>"
+
+personality:
+  # Free-text system prompt — author in the tenant's language (Urdu is fine
+  # here immediately; no code change needed for free text).
+  system_prompt: |
+    <System prompt: who the agent is, scope, tone, escalation policy.>
+  # Spoken on the first turn. For a single-language tenant, one greeting.
+  greeting: "<Greeting spoken at the start of the call.>"
+  # Allow the caller to interrupt the opening greeting (true reduces dropouts).
+  greeting_allow_interruptions: true
+  # Per-language monolingual greetings for RETURNING callers whose language is
+  # on file (keys are ISO codes, e.g. "ur", "en"). Optional.
+  greetings: {}
+  fallback: "<Spoken when the agent cannot answer.>"
+  goodbye: "<Spoken when ending the call.>"
+
+languages:
+  # Starting language (ISO code). Single-language tenants: default == only entry.
+  default: "<ur|en>"
+  # Allowed language codes. >1 entry enables the auto select_language tool and a
+  # multilingual greeting. For an Urdu-only tenant: ["ur"].
+  available: ["<ur>"]
+  # Ask the caller to pick a language on the first turn (multilingual only).
+  ask_on_start: false
+
+voice:
+  # See _defaults.yaml for the full list of provider keys. For an Urdu tenant,
+  # set these to the Urdu STUB seams and implement the engines (TODO(urdu)):
+  #   stt_provider: urdu_stt
+  #   tts_provider: urdu_tts
+  stt_provider: "<inference|urdu_stt|...>"
+  tts_provider: "<inference|urdu_tts|...>"
+  # Default TTS voice id (engine-specific). Per-language overrides go in `voices`.
+  tts_voice_id: "<voice-id>"
+  speed: 1.0
+  pitch: 1.0
+  # Per-language STT provider overrides (multilingual tenants). e.g. {ur: urdu_stt}
+  stt_providers: {}
+  # Per-language TTS voice overrides. e.g. {ur: <urdu_voice_id>}
+  voices: {}
+
+llm:
+  provider: gemini          # gemini (default) | openai | custom | lexantei
+  model: gemini-3.5-flash
+  temperature: 0.2
+  max_tokens: 2048
+
+behavior:
+  language: "<ur|en>"       # legacy field — mirror languages.default
+  max_call_duration_seconds: 600
+  preemptive_generation: false
+  allow_interruptions: true
+
+knowledge_base:
+  enabled: true
+  provider: qdrant
+  # Convention: "<slug-with-underscores>_faq". Must match the collection you
+  # populate via scripts/populate_qdrant.py and the platform's kb-point-id map.
+  collection: "<slug>_faq"
+  embedding_model: gemini-embedding-001
+  confidence_thresholds:
+    high: 0.75
+    medium: 0.70
+  kb_paths:
+    - knowledge/<kb-dir>/
+  # Phrases that mean a query is out of this tenant's scope (NAV-214 guard).
+  out_of_scope_keywords: []
+  out_of_scope_response: ""
+  surface_top_k: 3
+
+transfer:
+  enabled: false            # set true once an operator number/queue exists
+  transfer_mode: web        # web | sip
+  transfer_number: "<sip:1001@PBX_HOST or +92XXXXXXXXXX>"
+  transfer_message: "<Spoken before transferring to a human.>"
+  office_hours_start: 9
+  office_hours_end: 18
+  office_days: [0, 1, 2, 3, 4]   # 0=Mon … 6=Sun
+  timezone: "Asia/Karachi"       # office TZ for the out-of-hours check
+  # Per-language out-of-hours message (keys are ISO codes). Empty -> built-in.
+  out_of_hours_message: {}
+  # Optional guardian: instructions making the LLM try to help before escalating.
+  guardian:
+    operator_instructions: |
+      <When the caller asks for an operator: clarify first, search the KB,
+      offer a callback, and only escalate when they insist or it is critical.>
+    psychological_instructions: ~
+
+# Optional sub-agents (currently only the "appeal"/callback-intake type is wired).
+# Remove this block if the tenant has no sub-agent.
+sub_agents: {}
+#  appeal:
+#    type: appeal
+#    description: "<When the main agent should hand off to this sub-agent.>"
+#    instructions: "<Sub-agent's own system prompt.>"
+#    fields:
+#      - name: content
+#        prompts: {ur: "<Describe your issue.>"}
+#      - name: full_name
+#        prompts: {ur: "<Your name, please.>"}
+#    api_endpoint: "/api/v1/tickets"
+
+flows:
+  enabled: false            # set true + flow_dir to enable guided .flow.md flows
+  flow_dir: ""              # e.g. knowledge/<kb-dir>/flows
+  activation_threshold: 0.6
+
+responses:
+  silence_prompt: "<Spoken after a short silence.>"
+  silence_goodbye: "<Spoken before hanging up on prolonged silence.>"
+  fallback: "<Generic fallback.>"
+  goodbye: "<Goodbye line.>"
+  tool_wait: "<Filler while a tool runs.>"
+
+silence:
+  prompt_timeout: 15.0
+  goodbye_timeout: 30.0
+  monitor_interval: 2.0
+
+tools:
+  platform:
+    - search_knowledge_base
+    - request_escalation
+    - get_current_time
+    - end_call
+  tenant: []
+
+# Optional A/B experiment block. Omit for a normal tenant. All variants in an
+# experiment share tenant identity (id/slug/name/phone_numbers) and differ only
+# in this block + behavior fields. See README "A/B experiments".
+# experiment:
+#   id: <experiment-id>
+#   variant: a
+#   weight: 50

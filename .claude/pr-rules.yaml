@@ -1,0 +1,48 @@
+# .claude/pr-rules.yaml — read by the /create-pr skill.
+
+repo: urdu-voice-agent
+
+base_branch: main
+
+branch_pattern: "{user}/{ticket}-{slug}"
+
+commit:
+  prefixes: [feat, fix, refactor, chore, docs, test]
+  style: imperative
+  max_subject_length: 72
+
+reviewers:
+  # Add your repo's default PR reviewers (GitHub handles) here.
+  default: []
+
+pr:
+  template: |
+    ## 📝 Summary
+    {summary}
+
+    ## 🎯 Key Changes
+    - [ ] {change_1}
+    - [ ] {change_2}
+
+    ## 🔗 Related Context
+    - Issue / tracker: {tracker_url}
+    - Relates to: {related_or_remove}
+
+    ## 🧪 Testing & Validation
+    - [ ] Automated tests passed (`pytest` / `npm test`)
+    - [ ] Manually verified on {environment}
+    - [ ] Checked for edge cases ({examples})
+
+    ## 📸 Visuals (Optional)
+    {visuals_or_remove}
+
+    ## 🏁 Peer Review Checklist
+    - [ ] Code follows project style guidelines
+    - [ ] No sensitive data (API keys, secrets) included
+    - [ ] Documentation/README updated if necessary
+  draft_by_default: false
+
+safety:
+  forbid_force_push: true
+  forbid_no_verify: true
+  forbid_direct_commit_to_base: true

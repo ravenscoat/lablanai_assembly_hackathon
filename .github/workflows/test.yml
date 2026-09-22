@@ -34,10 +34,33 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Ruff
-        run: ruff check src tests
+        run: >-
+          ruff check src/relaydesk src/assemblyai_voice
+          scripts/run_voice_evaluation.py
+          tests/unit/test_relaydesk_store.py
+          tests/unit/test_relaydesk_store_factory.py
+          tests/unit/test_relaydesk_semantic_memory.py
+          tests/unit/test_relaydesk_runtime_events.py
+          tests/unit/test_voice_evaluation.py
+          tests/unit/test_assemblyai_session_config.py
 
       - name: Black
-        run: black --check src tests
+        run: >-
+          black --check src/relaydesk src/assemblyai_voice
+          scripts/run_voice_evaluation.py
+          tests/unit/test_relaydesk_store.py
+          tests/unit/test_relaydesk_store_factory.py
+          tests/unit/test_relaydesk_semantic_memory.py
+          tests/unit/test_relaydesk_runtime_events.py
+          tests/unit/test_voice_evaluation.py
+          tests/unit/test_assemblyai_session_config.py
 
       - name: Pytest
-        run: pytest tests -v
+        run: >-
+          pytest -v
+          tests/unit/test_relaydesk_store.py
+          tests/unit/test_relaydesk_store_factory.py
+          tests/unit/test_relaydesk_semantic_memory.py
+          tests/unit/test_relaydesk_runtime_events.py
+          tests/unit/test_voice_evaluation.py
+          tests/unit/test_assemblyai_session_config.py

@@ -13,6 +13,18 @@ This is not a prompt-only chatbot. RelayDesk combines real audio transport,
 specialist orchestration, persistent operational memory, deterministic tools,
 semantic case retrieval, verification, and a live audit dashboard.
 
+## One-click voice studio
+
+The local dashboard is the primary demo surface. Select **Duplicate charge**,
+**Lost access**, or **Safety challenge**, then press **Start real voice call**.
+RelayDesk synthesizes a caller, sends real audio through LiveKit and AssemblyAI,
+and streams the resulting transcript, specialist route, governed tool calls, and
+durable case memory into the interface. When the call ends, the studio displays
+the independent check count, returned audio frames, and tool-safety result.
+
+This makes the difference between an attractive mockup and a working product
+visible to a judge in one click.
+
 ## Why it exists
 
 Traditional support handoffs repeatedly ask customers for the same information.
